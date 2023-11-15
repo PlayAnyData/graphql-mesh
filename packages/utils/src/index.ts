@@ -15,3 +15,5 @@ export * from './pubsub.js';
 export * from './fileURLToPath.js';
 export * from './getHeadersObj.js';
 export * from './with-cookies.js';
+export * from './iterateAsync.js';
+export * from './wrapFetchWithHooks.js';

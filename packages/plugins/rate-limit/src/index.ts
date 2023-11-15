@@ -19,7 +19,10 @@ function deleteNode<T extends Record<string | number, any>>(
 }
 
 export default function useMeshRateLimit(
-  options: YamlConfig.RateLimitPluginConfig & {
+  {
+    config,
+    cache,
+  }: YamlConfig.RateLimitPluginConfig & {
     cache: KeyValueCache;
   },
 ): MeshPlugin<any> {
@@ -32,7 +35,7 @@ export default function useMeshRateLimit(
       visit(
         onExecuteArgs.args.document,
         visitInParallel(
-          options.config.map(config => {
+          config.map(config => {
             const typeMatcher = new Minimatch(config.type);
             const fieldMatcher = new Minimatch(config.field);
             const identifier = stringInterpolator.parse(config.identifier, {
@@ -47,7 +50,7 @@ export default function useMeshRateLimit(
                   const fieldDef = typeInfo.getFieldDef();
                   if (fieldMatcher.match(fieldDef.name)) {
                     const cacheKey = `rate-limit-${identifier}-${parentType.name}.${fieldDef.name}`;
-                    const remainingTokens$ = options.cache.get(cacheKey);
+                    const remainingTokens$ = cache.get(cacheKey);
                     jobs.push(
                       remainingTokens$.then((remainingTokens: number): Promise<void> => {
                         if (remainingTokens == null) {
@@ -76,7 +79,7 @@ export default function useMeshRateLimit(
                           return null;
                         }
 
-                        return options.cache.set(cacheKey, remainingTokens - 1, {
+                        return cache.set(cacheKey, remainingTokens - 1, {
                           ttl: config.ttl / 1000,
                         });
                       }),

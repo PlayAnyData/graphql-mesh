@@ -38,6 +38,9 @@ export const LengthDirective = new GraphQLDirective({
   name: 'length',
   locations: [DirectiveLocation.SCALAR],
   args: {
+    subgraph: {
+      type: GraphQLString,
+    },
     min: {
       type: GraphQLInt,
     },
@@ -84,6 +87,9 @@ export const DiscriminatorDirective = new GraphQLDirective({
   name: 'discriminator',
   locations: [DirectiveLocation.INTERFACE, DirectiveLocation.UNION],
   args: {
+    subgraph: {
+      type: GraphQLString,
+    },
     field: {
       type: GraphQLString,
     },
@@ -106,6 +112,11 @@ export function processDiscriminatorAnnotations({
 export const ResolveRootDirective = new GraphQLDirective({
   name: 'resolveRoot',
   locations: [DirectiveLocation.FIELD_DEFINITION],
+  args: {
+    subgraph: {
+      type: GraphQLString,
+    },
+  },
 });
 
 function rootResolver(root: any) {
@@ -124,6 +135,9 @@ export const ResolveRootFieldDirective = new GraphQLDirective({
     DirectiveLocation.INPUT_FIELD_DEFINITION,
   ],
   args: {
+    subgraph: {
+      type: GraphQLString,
+    },
     field: {
       type: GraphQLString,
     },
@@ -162,6 +176,9 @@ export const RegExpDirective = new GraphQLDirective({
   name: 'regexp',
   locations: [DirectiveLocation.SCALAR],
   args: {
+    subgraph: {
+      type: GraphQLString,
+    },
     pattern: {
       type: GraphQLString,
     },
@@ -194,6 +211,9 @@ export const PubSubOperationDirective = new GraphQLDirective({
   name: 'pubsubOperation',
   locations: [DirectiveLocation.FIELD_DEFINITION],
   args: {
+    subgraph: {
+      type: GraphQLString,
+    },
     pubsubTopic: {
       type: GraphQLString,
     },
@@ -213,7 +233,7 @@ export function processPubSubOperationAnnotations({
   pubsubTopic,
   logger,
 }: ProcessPubSubOperationAnnotationsOpts) {
-  field.subscribe = (root, args, context, info) => {
+  field.subscribe = function pubSubSubscribeFn(root, args, context, info) {
     const operationLogger = logger.child(`${info.parentType.name}.${field.name}`);
     const pubsub = context?.pubsub || globalPubsub;
     if (!pubsub) {
@@ -228,10 +248,12 @@ export function processPubSubOperationAnnotations({
       const expectedPath = new URL(expectedUrl, 'http://localhost').pathname;
       interpolatedPubSubTopic = `webhook:${expectedMethod}:${expectedPath}`;
     }
-    operationLogger.debug(`=> Subscribing to pubSubTopic: ${interpolatedPubSubTopic}`);
+    operationLogger.debug(
+      `${info.parentType.name}.${field.name} => Subscribing to pubSubTopic: ${interpolatedPubSubTopic}`,
+    );
     return pubsub.asyncIterator(interpolatedPubSubTopic);
   };
-  field.resolve = (root, args, context, info) => {
+  field.resolve = function pubSubResolver(root, args, context, info) {
     const operationLogger = logger.child(`${info.parentType.name}.${field.name}`);
     operationLogger.debug('Received ', root, ' from ', pubsubTopic);
     return root;
@@ -242,6 +264,9 @@ export const TypeScriptDirective = new GraphQLDirective({
   name: 'typescript',
   locations: [DirectiveLocation.SCALAR, DirectiveLocation.ENUM],
   args: {
+    subgraph: {
+      type: GraphQLString,
+    },
     type: {
       type: GraphQLString,
     },
@@ -304,6 +329,9 @@ export const HTTPOperationDirective = new GraphQLDirective({
   name: 'httpOperation',
   locations: [DirectiveLocation.FIELD_DEFINITION],
   args: {
+    subgraph: {
+      type: GraphQLString,
+    },
     path: {
       type: GraphQLString,
     },
@@ -341,31 +369,14 @@ export const HTTPOperationDirective = new GraphQLDirective({
   },
 });
 
-export const GlobalOptionsDirective = new GraphQLDirective({
-  name: 'globalOptions',
-  locations: [DirectiveLocation.OBJECT],
-  args: {
-    sourceName: {
-      type: GraphQLString,
-    },
-    endpoint: {
-      type: GraphQLString,
-    },
-    operationHeaders: {
-      type: ObjMapScalar,
-    },
-    queryStringOptions: {
-      type: ObjMapScalar,
-    },
-    queryParams: {
-      type: ObjMapScalar,
-    },
-  },
-});
-
 export const ResponseMetadataDirective = new GraphQLDirective({
   name: 'responseMetadata',
   locations: [DirectiveLocation.FIELD_DEFINITION],
+  args: {
+    subgraph: {
+      type: GraphQLString,
+    },
+  },
 });
 
 export function processResponseMetadataAnnotations(field: GraphQLField<any, any>) {
@@ -398,6 +409,9 @@ export const LinkResolverDirective = new GraphQLDirective({
   name: 'linkResolver',
   locations: [DirectiveLocation.FIELD_DEFINITION],
   args: {
+    subgraph: {
+      type: GraphQLString,
+    },
     linkResolverMap: {
       type: ObjMapScalar,
     },
@@ -496,6 +510,11 @@ export function processLinkFieldAnnotations(
 export const DictionaryDirective = new GraphQLDirective({
   name: 'dictionary',
   locations: [DirectiveLocation.FIELD_DEFINITION],
+  args: {
+    subgraph: {
+      type: GraphQLString,
+    },
+  },
 });
 
 export function processDictionaryDirective(
@@ -520,6 +539,11 @@ export function processDictionaryDirective(
 export const FlattenDirective = new GraphQLDirective({
   name: 'flatten',
   locations: [DirectiveLocation.FIELD_DEFINITION],
+  args: {
+    subgraph: {
+      type: GraphQLString,
+    },
+  },
 });
 
 export function processFlattenAnnotations(field: GraphQLField<any, any>) {
@@ -535,32 +559,31 @@ export function processFlattenAnnotations(field: GraphQLField<any, any>) {
   }
 }
 
-interface ProcessDirectiveArgs {
-  schema: GraphQLSchema;
-  pubsub: MeshPubSub;
-  logger: Logger;
-  globalFetch: MeshFetch;
+export interface ProcessDirectiveArgs {
+  pubsub?: MeshPubSub;
+  logger?: Logger;
+  globalFetch?: MeshFetch;
   endpoint?: string;
   timeout?: number;
   operationHeaders?: Record<string, string>;
   queryParams?: Record<string, any>;
 }
 
-export function processDirectives({
-  schema,
-  globalFetch,
-  logger,
-  pubsub,
-  ...extraGlobalOptions
-}: ProcessDirectiveArgs) {
+export function processDirectives(
+  schema: GraphQLSchema,
+  { globalFetch, logger, pubsub, ...extraGlobalOptions }: ProcessDirectiveArgs = {},
+) {
   const nonExecutableObjMapScalar = schema.getType('ObjMap');
   if (nonExecutableObjMapScalar && isScalarType(nonExecutableObjMapScalar)) {
     addExecutionLogicToScalar(nonExecutableObjMapScalar, ObjMapScalar);
   }
-  let [globalOptions = {}] = (getDirective(schema, schema.getQueryType(), 'globalOptions') ||
-    []) as [GlobalOptions];
-  globalOptions = {
-    ...globalOptions,
+  const transportDirectives = getDirective(schema, schema, 'transport');
+  const currDirective = transportDirectives?.[0];
+  const globalOptions = {
+    endpoint: currDirective?.location,
+    operationHeaders: currDirective?.headers,
+    queryParams: currDirective?.queryParams,
+    queryStringOptions: currDirective?.queryStringOptions,
     ...extraGlobalOptions,
   };
   const typeMap = schema.getTypeMap();
@@ -707,6 +730,9 @@ export const StatusCodeTypeNameDirective = new GraphQLDirective({
   locations: [DirectiveLocation.UNION],
   isRepeatable: true,
   args: {
+    subgraph: {
+      type: GraphQLString,
+    },
     typeName: {
       type: GraphQLString,
     },
@@ -720,6 +746,9 @@ export const EnumDirective = new GraphQLDirective({
   name: 'enum',
   locations: [DirectiveLocation.ENUM_VALUE],
   args: {
+    subgraph: {
+      type: GraphQLString,
+    },
     value: {
       type: GraphQLString,
     },
@@ -745,9 +774,37 @@ export const ExampleDirective = new GraphQLDirective({
     DirectiveLocation.SCALAR,
   ],
   args: {
+    subgraph: {
+      type: GraphQLString,
+    },
     value: {
       type: ObjMapScalar,
     },
   },
   isRepeatable: true,
+});
+
+export const TransportDirective = new GraphQLDirective({
+  name: 'transport',
+  args: {
+    subgraph: {
+      type: GraphQLString,
+    },
+    kind: {
+      type: GraphQLString,
+    },
+    location: {
+      type: GraphQLString,
+    },
+    headers: {
+      type: ObjMapScalar,
+    },
+    queryStringOptions: {
+      type: ObjMapScalar,
+    },
+    queryParams: {
+      type: ObjMapScalar,
+    },
+  },
+  locations: [DirectiveLocation.OBJECT],
 });

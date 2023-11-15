@@ -15,6 +15,7 @@ import {
 } from '@graphql-mesh/string-interpolation';
 import { MeshFetch } from '@graphql-mesh/types';
 import { Executor, getDirective, getRootTypes } from '@graphql-tools/utils';
+import { fetch as defaultFetchFn } from '@whatwg-node/fetch';
 import { PARSE_XML_OPTIONS, SoapAnnotations } from './utils.js';
 
 function isOriginallyListType(type: GraphQLOutputType): boolean {
@@ -108,7 +109,8 @@ function createRootValueMethod({
       },
     };
     const requestXML = jsonToXMLConverter.build(requestJson);
-    const response = await fetchFn(
+    const currentFetchFn = context?.fetch || fetchFn;
+    const response = await currentFetchFn(
       soapAnnotations.endpoint,
       {
         method: 'POST',
@@ -135,7 +137,7 @@ function createRootValueMethod({
 function createRootValue(
   schema: GraphQLSchema,
   fetchFn: MeshFetch,
-  operationHeaders: Record<string, string> = {},
+  operationHeaders: Record<string, string>,
 ) {
   const rootValue: Record<string, RootValueMethod> = {};
   const rootTypes = getRootTypes(schema);
@@ -172,7 +174,7 @@ function createRootValue(
 
 export function createExecutorFromSchemaAST(
   schema: GraphQLSchema,
-  fetchFn: MeshFetch,
+  fetchFn: MeshFetch = defaultFetchFn,
   operationHeaders: Record<string, string> = {},
 ) {
   let rootValue: Record<string, RootValueMethod>;

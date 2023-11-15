@@ -21,7 +21,7 @@ import {
   SelectionSetParam,
   SelectionSetParamOrFactory,
 } from '@graphql-mesh/types';
-import { parseWithCache } from '@graphql-mesh/utils';
+import { iterateAsync, parseWithCache } from '@graphql-mesh/utils';
 import { BatchDelegateOptions, batchDelegateToSchema } from '@graphql-tools/batch-delegate';
 import {
   delegateToSchema,
@@ -37,7 +37,6 @@ import {
 } from '@graphql-tools/utils';
 import { WrapQuery } from '@graphql-tools/wrap';
 import { MESH_API_CONTEXT_SYMBOL } from './constants.js';
-import { iterateAsync } from './utils.js';
 
 export function getInContextSDK(
   unifiedSchema: GraphQLSchema,

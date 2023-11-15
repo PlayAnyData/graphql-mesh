@@ -1,31 +1,41 @@
-import { basename, join } from 'path';
-import { introspectionFromSchema, lexicographicSortSchema } from 'graphql';
-import { findAndParseConfig } from '@graphql-mesh/cli';
-import { ProcessedConfig } from '@graphql-mesh/config';
-import { getMesh, MeshInstance } from '@graphql-mesh/runtime';
+import { readdirSync, readFileSync } from 'fs';
+import { join } from 'path';
+import { GraphQLSchema, parse } from 'graphql';
+import { getComposedSchemaFromConfig } from '@graphql-mesh/compose-cli';
+import { getExecutorForSupergraph } from '@graphql-mesh/fusion-runtime';
 import { printSchemaWithDirectives } from '@graphql-tools/utils';
-
-jest.setTimeout(30000);
+import { getSubgraphExecutor } from '@omnigraph/sqlite';
+import { composeConfig } from '../mesh.config';
 
 describe('SQLite Chinook', () => {
-  let config: ProcessedConfig;
-  let mesh: MeshInstance;
+  let supergraph: GraphQLSchema;
   beforeAll(async () => {
-    config = await findAndParseConfig({
-      dir: join(__dirname, '..'),
+    supergraph = await getComposedSchemaFromConfig({
+      ...composeConfig,
+      cwd: join(__dirname, '..'),
     });
-    mesh = await getMesh(config);
   });
-  it('should generate correct schema', async () => {
-    expect(printSchemaWithDirectives(mesh.schema)).toMatchSnapshot('sqlite-chinook-schema');
+  it('generates the schema correctly', () => {
+    expect(printSchemaWithDirectives(supergraph)).toMatchSnapshot('schema');
   });
-  it('should give correct response for example queries', async () => {
-    for (const source of config.documents || []) {
-      const result = await mesh.execute(source.document!, undefined);
-      expect(result).toMatchSnapshot(basename(source.location!) + '-sqlite-chinook-result');
-    }
-  });
-  afterAll(async () => {
-    mesh.destroy();
-  });
+  const queryNames = readdirSync(join(__dirname, '../example-queries'));
+  for (const queryName of queryNames) {
+    it(`executes ${queryName} query`, async () => {
+      const supergraphExecutor = getExecutorForSupergraph(supergraph, transportEntry => {
+        if (transportEntry.kind === 'sqlite') {
+          return getSubgraphExecutor({
+            ...transportEntry,
+            kind: 'sqlite',
+            cwd: join(__dirname, '..'),
+          });
+        }
+        throw new Error(`Unsupported transport kind: ${transportEntry.kind}`);
+      });
+      const query = readFileSync(join(__dirname, '../example-queries', queryName), 'utf8');
+      const result = await supergraphExecutor({
+        document: parse(query),
+      });
+      expect(result).toMatchSnapshot(queryName);
+    });
+  }
 });
