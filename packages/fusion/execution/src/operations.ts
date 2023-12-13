@@ -7,7 +7,7 @@ import {
   OperationDefinitionNode,
   valueFromASTUntyped,
 } from 'graphql';
-import { getRootTypeMap, isPromise } from '@graphql-tools/utils';
+import { getRootTypeMap, isAsyncIterable, isPromise, mapAsyncIterator } from '@graphql-tools/utils';
 import {
   createExecutableResolverOperationNodesWithDependencyMap,
   ExecutableResolverOperationNode,
@@ -217,6 +217,9 @@ export function executeOperationPlan({
   });
   if (isPromise(res$)) {
     return res$.then(res => prepareExecutionResult(res, errors, executablePlan));
+  }
+  if (isAsyncIterable(res$)) {
+    return mapAsyncIterator(res$, res => prepareExecutionResult(res, errors, executablePlan));
   }
   return prepareExecutionResult(res$, errors, executablePlan);
 }

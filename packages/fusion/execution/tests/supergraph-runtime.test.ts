@@ -1,12 +1,33 @@
-import { buildSchema, DocumentNode, getOperationAST, GraphQLObjectType, Kind } from 'graphql';
+import { inspect } from 'util';
+import {
+  buildSchema,
+  DocumentNode,
+  getOperationAST,
+  GraphQLObjectType,
+  Kind,
+  parse,
+} from 'graphql';
 import { createDefaultExecutor } from '@graphql-tools/delegate';
 import { makeExecutableSchema } from '@graphql-tools/schema';
-import { printSchemaWithDirectives } from '@graphql-tools/utils';
+import { isAsyncIterable, printSchemaWithDirectives } from '@graphql-tools/utils';
+import {
+  createExecutableResolverOperationNode,
+  executeResolverOperationNode,
+} from '../src/execution.js';
 import { extractSubgraphFromSupergraph } from '../src/extractSubgraph.js';
 import { FlattenedFieldNode, FlattenedSelectionSet } from '../src/flattenSelections.js';
-import { executeOperation, planOperation } from '../src/operations.js';
+import {
+  createExecutablePlanForOperation,
+  executeOperation,
+  planOperation,
+  serializeExecutableOperationPlan,
+} from '../src/operations.js';
 import { parseAndCache, printCached } from '../src/parseAndPrintWithCache.js';
-import { createResolveNode, visitFieldNodeForTypeResolvers } from '../src/query-planning.js';
+import {
+  createResolveNode,
+  ResolverOperationNode,
+  visitFieldNodeForTypeResolvers,
+} from '../src/query-planning.js';
 import { serializeResolverOperationNode } from '../src/serialization.js';
 
 describe('Query Planning', () => {
@@ -472,6 +493,10 @@ describe('Execution', () => {
         foos: [Foo!]!
       }
 
+      type Subscription {
+        onFoo: Foo!
+      }
+
       type Foo {
         id: ID!
       }
@@ -489,6 +514,23 @@ describe('Execution', () => {
             id: 'A_FOO_ID_1',
           },
         ],
+      },
+      Subscription: {
+        onFoo: {
+          subscribe: async function* () {
+            yield {
+              onFoo: {
+                id: 'A_FOO_ID_0',
+              },
+            };
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            yield {
+              onFoo: {
+                id: 'A_FOO_ID_1',
+              },
+            };
+          },
+        },
       },
     },
   });
@@ -605,6 +647,10 @@ describe('Execution', () => {
         @resolver(operation: "query FooFromB($id: ID!) { foo(id: $id) }", subgraph: "B")
       fooById(id: ID!): Foo!
         @resolver(operation: "query FooFromC($id: ID!) { foo(id: $id) }", subgraph: "C")
+    }
+
+    type Subscription {
+      onFoo: Foo! @resolver(operation: "subscription OnFoo { onFoo }", subgraph: "A")
     }
   `;
 
@@ -1101,30 +1147,148 @@ describe('Execution', () => {
       },
     });
   });
-  // TODO: later
-  it.skip('conditional variables', async () => {
-    const supergraph = buildSchema(/* GraphQL */ `
-      type Query {
-        product(id: ID!): Product!
-          @resolver(operation: "query ProductFromA($id: ID!) { product(id: $id) }", subgraph: "A")
-      }
+  // // TODO: later
+  // it.skip('conditional variables', async () => {
+  //   const supergraph = buildSchema(/* GraphQL */ `
+  //     type Query {
+  //       product(id: ID!): Product!
+  //         @resolver(operation: "query ProductFromA($id: ID!) { product(id: $id) }", subgraph: "A")
+  //     }
 
-      type Product
-        @source(subgraph: "A")
-        @variable(name: "Product_id", select: "id", subgraph: "A")
-        @variable(name: "Product_id", select: "id", subgraph: "B")
-        @variable(name: "Product_entity", value: "{ id: $Product_id, weight: $Product_weight, price: $Product_price }", subgraph: "B")
-        @resolver(operation: "query ProductFromB($Product_entity: [Any!]!) { _entities(representations: $Product_entity) }", subgraph: "B", kind: BATCH) {
-        {
-        id: ID! @source(subgraph: "A") @source(subgraph: "B")
-        weight: Int! @source(subgraph: "A")
-        price: Int! @source(subgraph: "B")
-        shippingEstimate: Int!
-          @source(subgraph: "B")
-          @variable(name: "Product_weight", select: "weight", subgraph: "A")
-          @variable(name: "Product_price", select: "price", subgraph: "A")
+  //     type Product
+  //       @source(subgraph: "A")
+  //       @variable(name: "Product_id", select: "id", subgraph: "A")
+  //       @variable(name: "Product_id", select: "id", subgraph: "B")
+  //       @variable(name: "Product_entity", value: "{ id: $Product_id, weight: $Product_weight, price: $Product_price }", subgraph: "B")
+  //       @resolver(operation: "query ProductFromB($Product_entity: [Any!]!) { _entities(representations: $Product_entity) }", subgraph: "B", kind: BATCH) {
+  //       {
+  //       id: ID! @source(subgraph: "A") @source(subgraph: "B")
+  //       weight: Int! @source(subgraph: "A")
+  //       price: Int! @source(subgraph: "B")
+  //       shippingEstimate: Int!
+  //         @source(subgraph: "B")
+  //         @variable(name: "Product_weight", select: "weight", subgraph: "A")
+  //         @variable(name: "Product_price", select: "price", subgraph: "A")
+  //     }
+  //   `);
+  // });
+  it('plans subscriptions', async () => {
+    const operationInText = /* GraphQL */ `
+      subscription Test {
+        onFoo {
+          id
+        }
       }
-    `);
+    `;
+    const operationDoc = parseAndCache(operationInText);
+
+    const plan = createExecutablePlanForOperation({
+      supergraph,
+      document: operationDoc,
+    });
+    expect(serializeExecutableOperationPlan(plan)).toMatchObject({
+      resolverOperationNodes: [],
+      resolverDependencyFieldMap: {
+        onFoo: [
+          {
+            subgraph: 'A',
+            resolverOperationDocument: 'subscription OnFoo {\n  __export: onFoo {\n    id\n  }\n}',
+            id: 0,
+          },
+        ],
+      },
+    });
+  });
+  it('executes subscription resolver node', async () => {
+    const resolverOperationNode: ResolverOperationNode = {
+      subgraph: 'A',
+      resolverOperationDocument: parse(/* GraphQL */ `
+        subscription OnFoo {
+          __export: onFoo {
+            id
+          }
+        }
+      `),
+      resolverDependencies: [],
+      resolverDependencyFieldMap: new Map(),
+    };
+    const executableResolverOperationNode = createExecutableResolverOperationNode(
+      resolverOperationNode,
+      0,
+    );
+    const result = await executeResolverOperationNode({
+      resolverOperationNode: executableResolverOperationNode,
+      inputVariableMap: new Map(),
+      onExecute,
+      context: {},
+      path: [],
+      errors: [],
+    });
+    if (!isAsyncIterable(result)) {
+      throw new Error(`Expected async iterable`);
+    }
+    const collectedValues = [];
+    for await (const iterRes of result) {
+      collectedValues.push(iterRes);
+    }
+    expect(collectedValues).toMatchObject([
+      {
+        exported: { id: 'A_FOO_ID_0' },
+      },
+      {
+        exported: { id: 'A_FOO_ID_1' },
+      },
+    ]);
+  });
+  it('executes subscription operation', async () => {
+    const operationInText = /* GraphQL */ `
+      subscription Test {
+        onFoo {
+          id
+          bar
+          baz
+        }
+      }
+    `;
+    const operationDoc = parseAndCache(operationInText);
+
+    const result = await executeOperation({
+      supergraph,
+      onExecute,
+      document: operationDoc,
+      operationName: 'Test',
+    });
+
+    if (!isAsyncIterable(result)) {
+      throw new Error(`Expected async iterable`);
+    }
+
+    const collectedValues = [];
+
+    for await (const iterRes of result) {
+      collectedValues.push(iterRes);
+    }
+
+    expect(collectedValues).toMatchObject([
+      {
+        data: {
+          onFoo: {
+            id: 'A_FOO_ID_0',
+            bar: 'B_BAR_FOR_A_FOO_ID_0',
+            baz: 'C_BAZ_FOR_A_FOO_ID_0',
+          },
+        },
+      },
+      {
+        data: {
+          onFoo: {
+            id: 'A_FOO_ID_1',
+            bar: 'B_BAR_FOR_A_FOO_ID_1',
+            baz: 'C_BAZ_FOR_A_FOO_ID_1',
+          },
+        },
+      },
+    ]);
   });
 });
 

@@ -6,8 +6,10 @@ import {
   Executor,
   isAsyncIterable,
   isPromise,
+  mapAsyncIterator,
   relocatedError,
 } from '@graphql-tools/utils';
+import { Repeater } from '@repeaterjs/repeater';
 import { ResolverOperationNode } from './query-planning.js';
 import { visitResolutionPath } from './visitResolutionPath.js';
 
@@ -196,6 +198,7 @@ export function executeResolverOperationNodesWithDependenciesInParallel({
   obj?: any;
 }) {
   const dependencyPromises: PromiseLike<any>[] = [];
+  const asyncIterables: AsyncIterable<any>[] = [];
 
   const outputVariableMap = new Map();
 
@@ -221,6 +224,8 @@ export function executeResolverOperationNodesWithDependenciesInParallel({
     }
     if (isPromise(depOpResult$)) {
       dependencyPromises.push(depOpResult$.then(handleDepOpResult));
+    } else if (isAsyncIterable(depOpResult$)) {
+      asyncIterables.push(depOpResult$);
     } else {
       handleDepOpResult(depOpResult$);
     }
@@ -228,6 +233,7 @@ export function executeResolverOperationNodesWithDependenciesInParallel({
 
   for (const [fieldName, fieldOperationNodes] of fieldDependencyMap) {
     const fieldOpPromises: PromiseLike<any>[] = [];
+    const fieldOpAsyncIterables: AsyncIterable<any>[] = [];
     const fieldOpResults: any[] = [];
     let listed = false;
     for (const fieldOperationNode of fieldOperationNodes) {
@@ -249,6 +255,8 @@ export function executeResolverOperationNodesWithDependenciesInParallel({
       }
       if (isPromise(fieldOpResult$)) {
         fieldOpPromises.push(fieldOpResult$.then(handleFieldOpResult));
+      } else if (isAsyncIterable(fieldOpResult$)) {
+        fieldOpAsyncIterables.push(mapAsyncIterator(fieldOpResult$, handleFieldOpResult));
       } else {
         handleFieldOpResult(fieldOpResult$);
       }
@@ -300,7 +308,17 @@ export function executeResolverOperationNodesWithDependenciesInParallel({
         }
       }
     }
-    if (fieldOpPromises.length) {
+    if (fieldOpAsyncIterables.length) {
+      const mergedIterable = Repeater.merge(fieldOpAsyncIterables);
+      asyncIterables.push(
+        mapAsyncIterator(mergedIterable, (): void | Promise<void> => {
+          if (fieldOpPromises.length) {
+            return Promise.all(fieldOpPromises).then(handleFieldOpResults);
+          }
+          handleFieldOpResults();
+        }),
+      );
+    } else if (fieldOpPromises.length) {
       dependencyPromises.push(Promise.all(fieldOpPromises).then(handleFieldOpResults));
     } else {
       handleFieldOpResults();
@@ -313,6 +331,15 @@ export function executeResolverOperationNodesWithDependenciesInParallel({
     };
   }
 
+  if (asyncIterables.length) {
+    const mergedIterable = Repeater.merge(asyncIterables);
+    return mapAsyncIterator(mergedIterable, () => {
+      if (dependencyPromises.length) {
+        return Promise.all(dependencyPromises).then(handleDependencyPromises);
+      }
+      return handleDependencyPromises();
+    });
+  }
   if (dependencyPromises.length) {
     return Promise.all(dependencyPromises).then(handleDependencyPromises);
   }
@@ -355,6 +382,9 @@ export function executeResolverOperationNode({
           path: [...path, varIndex],
           errors,
         });
+        if (isAsyncIterable(itemResult$)) {
+          throw new Error('Async iterables not supported yet');
+        }
         if (isPromise(itemResult$)) {
           promises.push(
             itemResult$.then(resolvedVarValueItem => {
@@ -403,10 +433,6 @@ export function executeResolverOperationNode({
     variablesForOperation,
     context,
   );
-
-  if (isAsyncIterable(result$)) {
-    throw new Error(`Async iterable not supported`);
-  }
 
   function handleResult(result: any) {
     result?.errors?.forEach((error: any) => {
@@ -491,6 +517,10 @@ export function executeResolverOperationNode({
       exported,
       outputVariableMap,
     };
+  }
+
+  if (isAsyncIterable(result$)) {
+    return mapAsyncIterator(result$ as AsyncIterableIterator<any>, handleResult as any);
   }
 
   if (isPromise(result$)) {
