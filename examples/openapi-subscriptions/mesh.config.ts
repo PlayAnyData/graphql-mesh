@@ -1,4 +1,5 @@
 import { MeshComposeCLIConfig } from '@graphql-mesh/compose-cli';
+import { MeshServeCLIConfig, useWebhooks } from '@graphql-mesh/serve-cli';
 import { loadOpenAPISubgraph } from '@omnigraph/openapi';
 
 export const composeConfig: MeshComposeCLIConfig = {
@@ -10,4 +11,9 @@ export const composeConfig: MeshComposeCLIConfig = {
       }),
     },
   ],
+};
+
+export const serveConfig: MeshServeCLIConfig = {
+  supergraph: './supergraph.graphql',
+  plugins: [useWebhooks()],
 };

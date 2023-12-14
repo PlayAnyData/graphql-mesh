@@ -1,17 +1,15 @@
 import { GraphQLSchema } from 'graphql';
-import { createDefaultExecutor } from '@graphql-tools/delegate';
-import { getExecutableThriftSchema } from './execution.js';
+import { getThriftExecutor } from './execution.js';
 import { GraphQLThriftLoaderOptions, loadNonExecutableGraphQLSchemaFromIDL } from './schema.js';
 
 export default async function loadGraphQLSchemaFromThriftIDL(
   name: string,
   opts: Omit<GraphQLThriftLoaderOptions, 'subgraphName'>,
 ) {
-  const nonExecutableSchema = await loadNonExecutableGraphQLSchemaFromIDL({
+  return loadNonExecutableGraphQLSchemaFromIDL({
     ...opts,
     subgraphName: name,
   });
-  return getExecutableThriftSchema(nonExecutableSchema);
 }
 
 export * from './types.js';
@@ -45,5 +43,5 @@ export function getSubgraphExecutor(
   _transportEntry: ThriftTransportEntry,
   getSubgraph: () => GraphQLSchema,
 ) {
-  return createDefaultExecutor(getExecutableThriftSchema(getSubgraph()));
+  return getThriftExecutor(getSubgraph());
 }

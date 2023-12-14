@@ -231,9 +231,10 @@ export function processPubSubOperationAnnotations({
   field,
   globalPubsub,
   pubsubTopic,
-  logger,
+  logger: globalLogger,
 }: ProcessPubSubOperationAnnotationsOpts) {
   field.subscribe = function pubSubSubscribeFn(root, args, context, info) {
+    const logger = context?.logger || globalLogger;
     const operationLogger = logger.child(`${info.parentType.name}.${field.name}`);
     const pubsub = context?.pubsub || globalPubsub;
     if (!pubsub) {
@@ -254,6 +255,7 @@ export function processPubSubOperationAnnotations({
     return pubsub.asyncIterator(interpolatedPubSubTopic);
   };
   field.resolve = function pubSubResolver(root, args, context, info) {
+    const logger = context?.logger || globalLogger;
     const operationLogger = logger.child(`${info.parentType.name}.${field.name}`);
     operationLogger.debug('Received ', root, ' from ', pubsubTopic);
     return root;

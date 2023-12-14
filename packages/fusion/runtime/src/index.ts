@@ -16,6 +16,8 @@ import {
   executeOperationPlan,
   extractSubgraphFromSupergraph,
 } from '@graphql-mesh/fusion-execution';
+// eslint-disable-next-line import/no-extraneous-dependencies
+import { iterateAsync } from '@graphql-mesh/utils';
 import { defaultMergedResolver } from '@graphql-tools/delegate';
 import { addResolversToSchema } from '@graphql-tools/schema';
 import {
@@ -24,7 +26,9 @@ import {
   Executor,
   getDirective,
   IResolvers,
+  isAsyncIterable,
   isPromise,
+  mapAsyncIterator,
   memoize2of4,
 } from '@graphql-tools/utils';
 import { wrapSchema } from '@graphql-tools/wrap';
@@ -120,39 +124,60 @@ export function getExecutorForSupergraph(
         // eslint-disable-next-line no-inner-declarations
         function wrapExecutorWithHooks(currentExecutor: Executor) {
           if (onSubgraphExecuteHooks.length) {
-            return async function executorWithHooks(subgraphExecReq: ExecutionRequest) {
+            return function executorWithHooks(subgraphExecReq: ExecutionRequest) {
               const onSubgraphExecuteDoneHooks: OnSubgraphExecuteDoneHook[] = [];
-              for (const onSubgraphExecute of onSubgraphExecuteHooks) {
-                const onSubgraphExecuteDoneHook = await onSubgraphExecute({
-                  supergraph,
-                  subgraphName,
-                  transportKind: transportEntry?.kind,
-                  transportLocation: transportEntry?.location,
-                  transportHeaders: transportEntry?.headers,
-                  transportOptions: transportEntry?.options,
-                  executionRequest: subgraphExecReq,
-                  executor: currentExecutor,
-                  setExecutor(newExecutor: Executor) {
-                    currentExecutor = newExecutor;
-                  },
-                });
-                if (onSubgraphExecuteDoneHook) {
-                  onSubgraphExecuteDoneHooks.push(onSubgraphExecuteDoneHook);
-                }
-              }
-              if (onSubgraphExecuteDoneHooks.length) {
-                let currentResult = await currentExecutor(subgraphExecReq);
-                for (const onSubgraphExecuteDoneHook of onSubgraphExecuteDoneHooks) {
-                  await onSubgraphExecuteDoneHook({
-                    result: currentResult as ExecutionResult,
-                    setResult(newResult: ExecutionResult) {
-                      currentResult = newResult;
+              const onSubgraphExecuteHooksRes$ = iterateAsync(
+                onSubgraphExecuteHooks,
+                onSubgraphExecuteHook =>
+                  onSubgraphExecuteHook({
+                    supergraph,
+                    subgraphName,
+                    transportKind: transportEntry?.kind,
+                    transportLocation: transportEntry?.location,
+                    transportHeaders: transportEntry?.headers,
+                    transportOptions: transportEntry?.options,
+                    executionRequest: subgraphExecReq,
+                    executor: currentExecutor,
+                    setExecutor(newExecutor: Executor) {
+                      currentExecutor = newExecutor;
                     },
-                  });
+                  }),
+                onSubgraphExecuteDoneHooks,
+              );
+              function handleOnSubgraphExecuteHooksResult() {
+                if (onSubgraphExecuteDoneHooks.length) {
+                  // eslint-disable-next-line no-inner-declarations
+                  function handleExecutorResWithHooks(currentResult: ExecutionResult) {
+                    const onSubgraphExecuteDoneHooksRes$ = iterateAsync(
+                      onSubgraphExecuteDoneHooks,
+                      onSubgraphExecuteDoneHook =>
+                        onSubgraphExecuteDoneHook({
+                          result: currentResult,
+                          setResult(newResult: ExecutionResult) {
+                            currentResult = newResult;
+                          },
+                        }),
+                    );
+                    if (isPromise(onSubgraphExecuteDoneHooksRes$)) {
+                      return onSubgraphExecuteDoneHooksRes$.then(() => currentResult);
+                    }
+                    return currentResult;
+                  }
+                  const executorRes$ = currentExecutor(subgraphExecReq);
+                  if (isPromise(executorRes$)) {
+                    return executorRes$.then(handleExecutorResWithHooks);
+                  }
+                  if (isAsyncIterable(executorRes$)) {
+                    return mapAsyncIterator(executorRes$ as any, handleExecutorResWithHooks);
+                  }
+                  return handleExecutorResWithHooks(executorRes$);
                 }
-                return currentResult;
+                return currentExecutor(subgraphExecReq);
               }
-              return currentExecutor(subgraphExecReq);
+              if (isPromise(onSubgraphExecuteHooksRes$)) {
+                return onSubgraphExecuteHooksRes$.then(handleOnSubgraphExecuteHooksResult);
+              }
+              return handleOnSubgraphExecuteHooksResult();
             };
           }
           return currentExecutor;
@@ -167,12 +192,12 @@ export function getExecutorForSupergraph(
           );
           if (isPromise(executor$)) {
             return executor$.then(executor_ => {
-              executor = wrapExecutorWithHooks(executor_);
+              executor = wrapExecutorWithHooks(executor_) as Executor;
               executorMap[subgraphName] = executor;
               return executor(subgraphExecReq);
             });
           }
-          executor = wrapExecutorWithHooks(executor$);
+          executor = wrapExecutorWithHooks(executor$) as Executor;
           executorMap[subgraphName] = executor;
           return executor(subgraphExecReq);
         };
@@ -286,7 +311,7 @@ export function useSupergraph<TServerContext, TUserContext>(
   }
 
   let initialSupergraph$: Promise<void> | void;
-
+  let initiated = false;
   return {
     onYogaInit({ yoga }) {
       plugins = yoga.getEnveloped._plugins as SupergraphPlugin[];
@@ -294,7 +319,10 @@ export function useSupergraph<TServerContext, TUserContext>(
     onRequestParse() {
       return {
         onRequestParseDone() {
-          initialSupergraph$ ||= getAndSetSupergraph();
+          if (!initiated) {
+            initialSupergraph$ = getAndSetSupergraph();
+          }
+          initiated = true;
           return initialSupergraph$;
         },
       };
@@ -311,6 +339,11 @@ export function useSupergraph<TServerContext, TUserContext>(
           return;
         }
         setExecuteFn(executeFn);
+      }
+    },
+    onSubscribe({ setSubscribeFn }) {
+      if (executeFn) {
+        setSubscribeFn(executeFn);
       }
     },
     invalidateSupergraph() {
